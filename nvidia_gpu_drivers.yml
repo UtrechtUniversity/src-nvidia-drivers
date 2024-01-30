@@ -1,0 +1,72 @@
+---
+- name: Install nvidia GPU drivers and container runtime
+  hosts: localhost
+  gather_facts: true
+
+  tasks:
+  
+    - name: Ensure supported OS
+      when: ansible_distribution != 'Ubuntu' or ansible_distribution_major_version < '22'
+      fail: 
+        msg: 'This component is designed for Ubuntu version >= 22'
+
+    # Workaround the fact that the Docker Compose External component currently does not perform these steps on Ubuntu 22
+    - name: Install the packages
+      package:
+        name:
+          - python3
+          - python3-setuptools
+          - python3-pip
+          - docker.io
+          - curl
+
+    - name: Install drivers package
+      when: 
+      package:
+        name: ubuntu-drivers-common
+        state: present
+
+    - name: Install drivers
+      command: ubuntu-drivers install nvidia
+      register: ubuntu_drivers
+
+    - name: Run nvidia-smi to ensure GPU support is working
+      command: /usr/bin/nvidia-smi
+      register: nvidia_smi_output
+
+    - name: Debug nvida-smi
+      debug:
+        var: nvidia_smi_output
+
+    - name: Set up Docker NVIDIA driver
+    # According to: https://nvidia.github.io/nvidia-container-runtime/
+      block:
+        - name: Add apt nvidia key
+          apt_key:
+            url: https://nvidia.github.io/nvidia-container-runtime/gpgkey
+            state: present
+
+        - name: Add nvidia apt repo
+          apt_repository:
+            repo: "{{ item }}"
+            state: present
+          with_items:
+            - deb https://nvidia.github.io/libnvidia-container/stable/ubuntu18.04/$(ARCH) /
+            - deb https://nvidia.github.io/nvidia-container-runtime/stable/ubuntu18.04/$(ARCH) /
+          
+        - name: Install runtime
+          apt:
+            name: nvidia-container-runtime
+            update_cache: true
+
+    - name: Check if docker service exists
+      stat:
+        path: /lib/systemd/system/docker.service
+      register: service_status
+
+    - name: Restart Docker daemon
+      when: service_status.stat.exists
+      ansible.builtin.systemd:
+        state: restarted
+        daemon_reload: true
+        name: docker
